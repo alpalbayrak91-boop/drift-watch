@@ -1,0 +1,19 @@
+cff-version: 1.2.0
+title: "Drift-Watch v3.9.0: Zero-Cash Policy, Grant, and Free-Tier Quota Drift Radar"
+message: "If you use this software in research or engineering systems, please cite it using the metadata below."
+type: software
+authors:
+  - family-names: Albayrak
+    given-names: Alp
+    affiliation: AlpLab Research
+version: 3.9.0
+date-released: "2026-11-25"
+license: MIT
+repository-code: "https://github.com/alpalbayrak91-boop/drift-watch"
+keywords:
+  - cloudflare-workers
+  - d1-sqlite
+  - rate-limit-headers
+  - quota-drift-detection
+  - weyl-dispersion
+  - scale-to-zero

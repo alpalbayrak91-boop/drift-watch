@@ -1,0 +1,25 @@
+{
+  "title": "Drift-Watch v3.9.0: Zero-Cash Policy, Grant, and Free-Tier Quota Drift Radar with Weyl Dispersion and 0-SCAN SQLite/D1 Covering Indexes",
+  "version": "3.9.0",
+  "upload_type": "software",
+  "publication_date": "2026-11-25",
+  "license": "MIT",
+  "access_right": "open",
+  "creators": [
+    {
+      "name": "Albayrak, Alp",
+      "affiliation": "AlpLab Research"
+    }
+  ],
+  "description": "Zero-dependency Cloudflare Worker + D1 SQLite edge poller and Python 3.12 WSGI scale-to-zero mirror monitoring 40 grant, API, and cloud free-tier endpoints (34 MC06 core + 6 Wave-14 targets) with Weyl phase dispersion, Gamma-Poisson EWMA scheduling, IETF RateLimit header envelope parsing, Dec 1 2026 Cloudflare Observability split-billing shield, and 0-SCAN SQLite covering indexes at 0.0000 USD out-of-pocket cost.",
+  "keywords": [
+    "cloudflare-workers",
+    "d1-sqlite",
+    "quota-monitoring",
+    "rate-limiting",
+    "grant-radar",
+    "weyl-equidistribution",
+    "scale-to-zero",
+    "strict-csp3"
+  ]
+}
