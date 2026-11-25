@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 AlpLab Research
 # SPDX-License-Identifier: MIT
-"""Pytest verification suite for Drift-Watch v3.9.0 Worker, D1 SQLite Schema,
-Dec 1 2026 Observability Shield, and Scale-to-Zero Python 3.12 WSGI Edge Mirror.
+"""Pytest verification suite for Drift-Watch v3.9.1 Worker, D1 SQLite Schema,
+Dec 1 2026 Observability Shield, Ephemeral Deploy Config, and Scale-to-Zero WSGI Mirror.
 
 Strict KURAL-3 hygiene: 0 chr(36) across every file in the repository; USD only.
 """
@@ -12,21 +12,23 @@ import hashlib
 import io
 import json
 import re
+import sqlite3
 import subprocess
 import sys
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
+from unittest.mock import patch
 from wsgiref.validate import validator
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from scripts import deploy_cloudflare  # noqa: E402
 from server import drift_watch_edge_mirror as mirror  # noqa: E402
 
 EXCLUDED_DIRS = {".git", "node_modules", "__pycache__", ".pytest_cache", ".wrangler", "dist"}
 
-# SHA-256 digests of disallowed non-fleet / quarantined account tokens (keeps plaintext out of public repo)
 DISALLOWED_TOKEN_SHA256 = {
     "8386820647851c3128f6196b45bc29e834406c086104789268b07b8a39140113",
     "b0920c5c79e69be71240a764c4514275b563720c2c9d7546958e0792154be8da",
@@ -87,16 +89,20 @@ def _wsgi_request(
 
 def test_01_kural3_zero_chr36_across_all_repo_files() -> None:
     repo_files = _iter_repo_files()
-    assert len(repo_files) >= 9
+    assert len(repo_files) >= 12
     for fp in repo_files:
         text = fp.read_text(encoding="utf-8")
         assert chr(36) not in text, f"ASCII-36 violation in {fp.relative_to(REPO_ROOT)}"
 
 
 def test_02_kural7_kural8_clean_host_bind_and_opsec() -> None:
-    py_mirror = (REPO_ROOT / "server" / "drift_watch_edge_mirror.py").read_text(encoding="utf-8")
-    assert '"127.0.0.1"' in py_mirror
-    assert "0.0.0.0" not in py_mirror
+    assert mirror.resolve_bind_host({}) == "127.0.0.1"
+    assert mirror.resolve_bind_host({"BIND_HOST": ""}) == "127.0.0.1"
+    assert mirror.resolve_bind_host({"BIND_HOST": "   "}) == "127.0.0.1"
+    assert mirror.resolve_bind_host({"DEPLOY_TARGET": "cloud_run"}) == "127.0.0.1"
+    assert mirror.resolve_bind_host({"K_SERVICE": "alplab-drift-watch-v39"}) == "0.0.0.0"
+    assert mirror.resolve_bind_host({"K_SERVICE": "alplab-drift-watch-v39", "BIND_HOST": "127.0.0.1"}) == "127.0.0.1"
+    assert mirror.resolve_bind_host({"BIND_HOST": "0.0.0.0"}) == "0.0.0.0"
 
     dockerfile_txt = (REPO_ROOT / "Dockerfile").read_text(encoding="utf-8")
     assert "BIND_HOST=0.0.0.0" in dockerfile_txt
@@ -119,59 +125,179 @@ def test_02_kural7_kural8_clean_host_bind_and_opsec() -> None:
                 assert digest not in DISALLOWED_TOKEN_SHA256, f"Disallowed token in {fp.relative_to(REPO_ROOT)}"
 
 
-def test_03_node_syntax_check_cloudflare_worker() -> None:
+def test_03_node_syntax_and_worker_fetch_hardening() -> None:
     worker_js = REPO_ROOT / "src" / "cf_drift_watch_v39_worker.js"
     assert worker_js.exists()
-    proc = subprocess.run(
+    chk = subprocess.run(
         ["node", "--check", str(worker_js)],
         cwd=str(REPO_ROOT),
         capture_output=True,
         text=True,
         check=False,
     )
-    assert proc.returncode == 0, f"node --check failed: {proc.stderr}"
+    assert chk.returncode == 0, f"node --check failed: {chk.stderr}"
+
+    esm_probe = (
+        "import worker, { COLD_START_HEAL_SQL } from './src/cf_drift_watch_v39_worker.js';\n"
+        "const mockDb = {\n"
+        "  prepare(sql) {\n"
+        "    const stmt = {\n"
+        "      bind() { return stmt; },\n"
+        "      async first() {\n"
+        "        if (sql.includes('FROM dw_targets')) return { n: 40, u_weyl: 40, mc06_core_n: 34, acc_n: 0, cold_n: 0, cond_ready_n: 40 };\n"
+        "        if (sql.includes('FROM dw_provider_quota_envelopes')) return { tr_n: 0, cap_n: 0 };\n"
+        "        if (sql.includes('FROM dw_poll_hourly_rollup')) return { polls_24h: 40, warm_polls_24h: 40, cond_polls_24h: 40, h304_24h: 32, active_hours_24h: 6 };\n"
+        "        return { used_min: 0, budget_min: 60 };\n"
+        "      },\n"
+        "      async all() { return { results: [] }; }\n"
+        "    };\n"
+        "    return stmt;\n"
+        "  }\n"
+        "};\n"
+        "const env = { DRIFT_DB: mockDb };\n"
+        "const rRoot = await worker.fetch(new Request('https://example.workers.dev/'), env);\n"
+        "const tRoot = await rRoot.text();\n"
+        "const rHead = await worker.fetch(new Request('https://example.workers.dev/health', { method: 'HEAD' }), env);\n"
+        "const tHead = await rHead.text();\n"
+        "const rHz = await worker.fetch(new Request('https://example.workers.dev/healthz'), env);\n"
+        "const jHz = await rHz.json();\n"
+        "const r405 = await worker.fetch(new Request('https://example.workers.dev/health', { method: 'POST' }), env);\n"
+        "const r404 = await worker.fetch(new Request('https://example.workers.dev/unknown-route'), env);\n"
+        "const j404 = await r404.json();\n"
+        "console.log(JSON.stringify({\n"
+        "  hasIdx: COLD_START_HEAL_SQL.includes('idx_dw_targets_cold_start'),\n"
+        "  rootStatus: rRoot.status,\n"
+        "  rootText: tRoot,\n"
+        "  rootNosniff: rRoot.headers.get('x-content-type-options'),\n"
+        "  rootCsp: rRoot.headers.get('content-security-policy'),\n"
+        "  headStatus: rHead.status,\n"
+        "  headEmpty: tHead === '',\n"
+        "  headLen: Number(rHead.headers.get('content-length')),\n"
+        "  hzStatus: rHz.status,\n"
+        "  hzGate: jHz.t48h_deploy_gate_status,\n"
+        "  s405: r405.status,\n"
+        "  s404: r404.status,\n"
+        "  err404: j404.error\n"
+        "}));\n"
+    )
+    run_esm = subprocess.run(
+        ["node", "--input-type=module", "-e", esm_probe],
+        cwd=str(REPO_ROOT),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert run_esm.returncode == 0, f"Worker ESM probe failed: {run_esm.stderr}"
+    out = json.loads(run_esm.stdout.strip())
+    assert out["hasIdx"] is True
+    assert out["rootStatus"] == 200
+    assert "KONU-5" not in out["rootText"]
+    assert out["rootNosniff"] == "nosniff"
+    assert "default-src 'none'" in out["rootCsp"]
+    assert "frame-ancestors 'none'" in out["rootCsp"]
+    assert out["headStatus"] == 200 and out["headEmpty"] is True and out["headLen"] > 0
+    assert out["hzStatus"] == 200 and out["hzGate"] == "PASS_40_OF_40_AND_34_OF_34_READY"
+    assert out["s405"] == 405
+    assert out["s404"] == 404 and out["err404"] == "not_found"
 
 
-def test_04_sqlite_d1_schema_40_targets_34_mc06_and_unique_weyl() -> None:
+def test_04_sqlite_d1_schema_idempotent_redeploy_preserves_live_state() -> None:
+    sql_path = REPO_ROOT / "migrations" / "0001_drift_watch_v39_d1.sql"
+    sql_txt = sql_path.read_text(encoding="utf-8")
+    assert "INSERT OR REPLACE INTO dw_targets" not in sql_txt
+    assert sql_txt.count("INSERT OR IGNORE INTO dw_targets") == 40
+
+    conn = sqlite3.connect(":memory:")
+    conn.executescript(sql_txt)
+    conn.execute(
+        "UPDATE dw_targets SET last_polled_epoch_min = 29932555, last_etag = 'etag-live-w01', "
+        "last_canon_sha256 = 'deadbeefcafe1234', alpha_milli = 2750 WHERE target_id = 'W01'"
+    )
+    conn.commit()
+    # Re-apply migration SQL (simulating idempotent redeploy)
+    conn.executescript(sql_txt)
+    row = conn.execute(
+        "SELECT last_polled_epoch_min, last_etag, last_canon_sha256, alpha_milli FROM dw_targets WHERE target_id = 'W01'"
+    ).fetchone()
+    assert row == (29932555, "etag-live-w01", "deadbeefcafe1234", 2750)
+
     store = mirror.DriftWatchMirrorStore()
     health = store.health_payload()
     assert health["status"] == "ok"
-    assert health["version"] == "v3.9.0"
+    assert health["version"] == "v3.9.1"
     assert health["active_targets"] == 40
     assert health["mc06_core_w01_w34_active"] == 34
     assert health["wave14_extension_w35_w40_active"] == 6
     assert health["unique_weyl_offsets_count"] == 40
-    assert health["cold_start_pending_count"] == 40
     assert health["cash_overage_usd"] == "0.0000 USD"
-    assert health["kural3_zero_chr36"] is True
 
 
-def test_05_explain_query_plan_zero_full_table_scans() -> None:
+def test_05_explain_query_plan_exact_worker_coldres_uses_partial_index() -> None:
+    cold_sql = mirror.extract_worker_cold_start_sql()
+    assert "idx_dw_targets_cold_start" in cold_sql
+    assert "UNION ALL" in cold_sql
+
     store = mirror.DriftWatchMirrorStore()
     audit = store.verify_zero_table_scans()
-    assert audit["zero_full_table_scans"] is True, f"Full table scan detected: {audit}"
+    assert audit["zero_full_table_scans"] is True, f"Scan or partial-index miss: {audit}"
     assert audit["full_table_scan_count"] == 0
-    assert audit["index_count"] == 5
-    assert "idx_dw_targets_active_due" in audit["covering_and_partial_indexes"]
-    assert "idx_dw_targets_cold_start" in audit["covering_and_partial_indexes"]
+    assert audit["cold_start_uses_partial_index"] is True
+    cold_plan_str = " | ".join(audit["query_plans"]["cold_start_partial_lookup"])
+    assert "idx_dw_targets_cold_start" in cold_plan_str
+    assert "idx_dw_targets_active_due" not in cold_plan_str
+
+    # Verify 0 rows returned once all 40 targets have last_polled_epoch_min > 0
+    conn = sqlite3.connect(":memory:")
+    conn.executescript((REPO_ROOT / "migrations" / "0001_drift_watch_v39_d1.sql").read_text(encoding="utf-8"))
+    conn.execute("UPDATE dw_targets SET last_polled_epoch_min = 29932000")
+    warm_rows = conn.execute(cold_sql, (29931940, 29932240)).fetchall()
+    assert warm_rows == []
 
 
-def test_06_dec1_2026_observability_shield_wrangler_config() -> None:
-    wrangler_txt = (REPO_ROOT / "wrangler.toml").read_text(encoding="utf-8")
-    assert 'main = "src/cf_drift_watch_v39_worker.js"' in wrangler_txt
-    shield = mirror.parse_observability_shield(REPO_ROOT / "wrangler.toml")
+def test_06_dec1_2026_observability_shield_fail_closed_and_clean_wrangler(tmp_path: Path) -> None:
+    wrangler_path = REPO_ROOT / "wrangler.toml"
+    before_bytes = wrangler_path.read_bytes()
+    assert 'database_id = "00000000-0000-0000-0000-000000000000"' in before_bytes.decode("utf-8")
+
+    shield = mirror.parse_observability_shield(wrangler_path)
     assert shield["shield_compliant"] is True
     assert shield["head_sampling_rate"] == 0.10
     assert shield["logs_head_sampling_rate"] == 0.10
     assert shield["invocation_logs"] is False
     assert shield["traces_enabled"] is False
 
+    # Missing wrangler.toml MUST fail closed
+    missing_shield = mirror.parse_observability_shield(tmp_path / "nonexistent_wrangler.toml")
+    assert missing_shield["shield_compliant"] is False
+    assert missing_shield["error"] == "missing_wrangler_toml"
+
+    # Ephemeral deploy config must never mutate tracked wrangler.toml and must clean up temp file
+    test_uuid = "12345678-1234-4321-8765-123456789abc"
+    seen_configs: List[Path] = []
+
+    def _fake_run_cmd(cmd: List[str], check: bool = True) -> subprocess.CompletedProcess[str]:
+        if "--config" in cmd:
+            cfg = Path(cmd[cmd.index("--config") + 1])
+            assert cfg.exists()
+            assert cfg != wrangler_path
+            assert f'database_id = "{test_uuid}"' in cfg.read_text(encoding="utf-8")
+            seen_configs.append(cfg)
+        return subprocess.CompletedProcess(cmd, 0, stdout="ok\n", stderr="")
+
+    with patch.object(deploy_cloudflare, "run_cmd", side_effect=_fake_run_cmd):
+        deploy_cloudflare.deploy_with_ephemeral_config(test_uuid, src_toml=wrangler_path)
+
+    assert len(seen_configs) == 2
+    for cfg in seen_configs:
+        assert not cfg.exists(), f"Ephemeral config leaked on disk: {cfg}"
+    assert wrangler_path.read_bytes() == before_bytes
+
 
 def test_07_wsgi_endpoints_pep3333_strict_csp3_and_head_405_404() -> None:
     store = mirror.DriftWatchMirrorStore()
     validated_app = validator(mirror.create_wsgi_app(store))
 
-    for route in ("/", "/health", "/telemetry/24h", "/envelopes"):
+    for route in ("/", "/health", "/healthz", "/telemetry/24h", "/envelopes"):
         st, hdrs, body = _wsgi_request(validated_app, route, method="GET")
         assert st == "200 OK", f"Route {route} returned {st}"
         assert hdrs["X-Content-Type-Options"] == "nosniff"
@@ -194,7 +320,7 @@ def test_07_wsgi_endpoints_pep3333_strict_csp3_and_head_405_404() -> None:
             assert "0.0000 USD" in html_str
         else:
             parsed = json.loads(body.decode("utf-8"))
-            assert parsed["version"] == "v3.9.0"
+            assert parsed["version"] == "v3.9.1"
 
     st_j, _, body_j = _wsgi_request(validated_app, "/", query="format=json", method="GET")
     assert st_j == "200 OK"
@@ -204,6 +330,6 @@ def test_07_wsgi_endpoints_pep3333_strict_csp3_and_head_405_404() -> None:
     assert st_405 == "405 Method Not Allowed"
     assert json.loads(body_405.decode("utf-8"))["error"] == "method_not_allowed"
 
-    st_404, _, body_404 = _wsgi_request(validated_app, "/missing", method="GET")
+    st_404, _, body_404 = _wsgi_request(validated_app, "/unknown", method="GET")
     assert st_404 == "404 Not Found"
     assert json.loads(body_404.decode("utf-8"))["error"] == "not_found"

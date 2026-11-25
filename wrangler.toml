@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 AlpLab Research
 # SPDX-License-Identifier: MIT
-# Drift-Watch v3.9.0 Wrangler Configuration (Dec 1 2026 Split Observability Free Tier Shield)
+# Drift-Watch v3.9.1 Wrangler Configuration (Dec 1 2026 Split Observability Free Tier Shield)
 # Strict KURAL-3 hygiene: 0 chr(36); USD only.
 
 name = "alplab-drift-watch-v39"

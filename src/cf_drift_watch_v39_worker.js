@@ -1,7 +1,6 @@
-// IS-FON-93 / KONU-5-FIRSAT-KOTA-RADARI (2026-11-24)
-// Drift-Watch v3.9.0 Cloudflare Worker (Zero-Cash Free Tier, 40 Targets: 34 MC06 Core + 6 Wave-14)
+// IS-FON-93 / Drift-Watch v3.9.1 Cloudflare Worker (Zero-Cash Free Tier, 40 Targets: 34 MC06 Core + 6 Wave-14)
 // Full disk closure of DEADEND-K5-DRIFTV38-D1-SCHEMA-WORKER-SPLITBRAIN-20261124, DEADEND-K5-B77554C6, D90-4..D90-6:
-//   - D92-1: Unified last_polled_epoch_min + partial index idx_dw_targets_cold_start (0-SCAN).
+//   - D92-1: Unified last_polled_epoch_min + partial index idx_dw_targets_cold_start (0-SCAN via disjoint UNION ALL).
 //   - D92-2: Unified dw_poll_hourly_rollup (hour_bucket_utc, polls_total, polls_cold_start, polls_warm,
 //            polls_conditional_sent, http_304_count..net_err_count, bytes_fetched, bytes_saved_est).
 //   - V38-F2b: Cold-start network error (!t.last_canon_sha256) retries at nowEpochMin + waitMin (no 48h stall).
@@ -1088,6 +1087,48 @@ function upsertHourlyRollupStmt(db, hourBucketUtc, stats, nowIso) {
   );
 }
 
+export const COLD_START_HEAL_SQL =
+  "SELECT target_id, next_due_epoch_min FROM dw_targets INDEXED BY idx_dw_targets_cold_start "
+  + "WHERE active = 1 AND last_polled_epoch_min = 0 AND next_due_epoch_min < ? "
+  + "UNION ALL "
+  + "SELECT target_id, next_due_epoch_min FROM dw_targets INDEXED BY idx_dw_targets_cold_start "
+  + "WHERE active = 1 AND last_polled_epoch_min = 0 AND next_due_epoch_min > ? "
+  + "ORDER BY next_due_epoch_min ASC LIMIT 45";
+
+const WORKER_STRICT_CSP3 =
+  "default-src 'none'; style-src 'none'; script-src 'none'; img-src 'none'; "
+  + "connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
+
+function workerSecurityHeaders(contentType, byteLength, extraHeaders) {
+  const hdrs = {
+    "content-type": contentType,
+    "content-length": String(byteLength),
+    "x-content-type-options": "nosniff",
+    "x-frame-options": "DENY",
+    "referrer-policy": "no-referrer",
+    "cache-control": "no-store",
+    "content-security-policy": WORKER_STRICT_CSP3,
+  };
+  if (extraHeaders) {
+    for (const [k, v] of Object.entries(extraHeaders)) {
+      hdrs[k] = v;
+    }
+  }
+  return hdrs;
+}
+
+function respondWorkerJson(payload, status, method, extraHeaders) {
+  const bytes = new TextEncoder().encode(JSON.stringify(payload));
+  const headers = workerSecurityHeaders("application/json; charset=utf-8", bytes.byteLength, extraHeaders);
+  return new Response(method === "HEAD" ? null : bytes, { status, headers });
+}
+
+function respondWorkerText(text, status, method, extraHeaders) {
+  const bytes = new TextEncoder().encode(text);
+  const headers = workerSecurityHeaders("text/plain; charset=utf-8", bytes.byteLength, extraHeaders);
+  return new Response(method === "HEAD" ? null : bytes, { status, headers });
+}
+
 export default {
   async scheduled(_controller, env) {
     const now = new Date();
@@ -1108,11 +1149,9 @@ export default {
     const tauRem = weeklyRemainingFrac(now);
     const nowIso = now.toISOString();
 
-    const coldRes = await env.DRIFT_DB.prepare(
-      "SELECT target_id, next_due_epoch_min FROM dw_targets "
-      + "WHERE active = 1 AND last_polled_epoch_min = 0 AND (next_due_epoch_min > ? OR next_due_epoch_min < ?) "
-      + "ORDER BY next_due_epoch_min ASC LIMIT 45"
-    ).bind(nowEpochMin + 240, nowEpochMin - 60).all();
+    const coldRes = await env.DRIFT_DB.prepare(COLD_START_HEAL_SQL)
+      .bind(nowEpochMin - 60, nowEpochMin + 240)
+      .all();
     const coldRows = coldRes.results || [];
     if (coldRows.length > 0) {
       const healStmts = coldRows.map((r, idx) => {
@@ -1472,11 +1511,29 @@ export default {
   },
 
   async fetch(request, env) {
+    const method = String((request && request.method) || "GET").toUpperCase();
+    if (method !== "GET" && method !== "HEAD") {
+      return respondWorkerJson(
+        { error: "method_not_allowed", allowed: ["GET", "HEAD"] },
+        405,
+        method,
+        { allow: "GET, HEAD" }
+      );
+    }
+
     const url = new URL(request.url);
     const now = new Date();
     const nowHourBucket = Math.floor(now.getTime() / 3600000);
 
-    if (url.pathname === "/health") {
+    if (url.pathname === "/") {
+      return respondWorkerText(
+        "Drift-Watch v3.9.1 Unified Schema-Parity Edge Poller (0.0000 USD)",
+        200,
+        method
+      );
+    }
+
+    if (url.pathname === "/health" || url.pathname === "/healthz") {
       const c = await env.DRIFT_DB.prepare(
         "SELECT COUNT(*) AS n, COUNT(DISTINCT weyl_offset_min) AS u_weyl, "
         + "SUM(CASE WHEN is_mc06_core = 1 AND target_id GLOB 'W[0-9][0-9]' AND CAST(SUBSTR(target_id, 2) AS INTEGER) BETWEEN 1 AND 34 THEN 1 ELSE 0 END) AS mc06_core_n, "
@@ -1531,10 +1588,10 @@ export default {
         gateStatus = "WARN_LOW_CONDITIONAL_304";
       }
 
-      return new Response(JSON.stringify({
+      return respondWorkerJson({
         status: "ok",
         engine: "IS-FON-93-DRIFT-WATCH-V39-UNIFIED",
-        version: "v3.9.0",
+        version: "v3.9.1",
         active_targets: activeTargets,
         mc06_core_w01_w34_active: mc06CoreActive,
         unique_weyl_offsets_count: c ? (c.u_weyl || 0) : 0,
@@ -1573,7 +1630,7 @@ export default {
         d92_splitbrain_closed: true,
         kural3_zero_chr36: true,
         cash_overage_usd: "0.0000 USD",
-      }), { headers: { "content-type": "application/json" } });
+      }, 200, method);
     }
 
     if (url.pathname === "/telemetry/24h") {
@@ -1581,9 +1638,11 @@ export default {
         "SELECT hour_bucket_utc, polls_total, polls_cold_start, polls_warm, polls_conditional_sent, http_304_count, http_200_count, http_429_count, http_403_waf_count, http_404_410_count, http_5xx_count, net_err_count, bytes_fetched, bytes_saved_est, updated_at_utc "
         + "FROM dw_poll_hourly_rollup WHERE hour_bucket_utc >= ? ORDER BY hour_bucket_utc ASC"
       ).bind(nowHourBucket - 23).all();
-      return new Response(JSON.stringify({ version: "v3.9.0", now_hour_bucket_utc: nowHourBucket, hours: rows.results || [] }), {
-        headers: { "content-type": "application/json" },
-      });
+      return respondWorkerJson(
+        { version: "v3.9.1", now_hour_bucket_utc: nowHourBucket, hours: rows.results || [], cash_overage_usd: "0.0000 USD" },
+        200,
+        method
+      );
     }
 
     if (url.pathname === "/envelopes") {
@@ -1591,11 +1650,13 @@ export default {
         "SELECT target_id, provider_family, binding_bucket, quota_unit, last_http_status, throttle_kind, retryable, quarantine_class, retry_after_sec, rl_limit, rl_remaining, rl_reset_sec, effective_backoff_sec, clock_skew_sec, guard_band_breached, headroom_ratio_bps, backoff_until_epoch_min, consecutive_throttles, observed_at_utc "
         + "FROM dw_provider_quota_envelopes ORDER BY consecutive_throttles DESC, effective_backoff_sec DESC LIMIT 50"
       ).all();
-      return new Response(JSON.stringify({ version: "v3.9.0", envelopes: rows.results || [] }), {
-        headers: { "content-type": "application/json" },
-      });
+      return respondWorkerJson(
+        { version: "v3.9.1", envelopes: rows.results || [], cash_overage_usd: "0.0000 USD" },
+        200,
+        method
+      );
     }
 
-    return new Response("KONU-5 Drift-Watch v3.9.0 Unified Schema-Parity Edge Poller", { status: 200 });
+    return respondWorkerJson({ error: "not_found", path: url.pathname }, 404, method);
   },
 };

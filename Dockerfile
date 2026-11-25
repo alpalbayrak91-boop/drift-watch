@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 AlpLab Research
 # SPDX-License-Identifier: MIT
-# Drift-Watch v3.9.0 Scale-to-Zero Edge Mirror Container (Cloud Run us-central1 Always-Free Tier)
-# Zero ASCII-36 symbols; Cloud Run injects PORT automatically and Python reads os.environ['PORT'].
+# Drift-Watch v3.9.1 Scale-to-Zero Edge Mirror Container (Cloud Run us-central1 Always-Free Tier)
+# Zero ASCII-36 symbols; Cloud Run injects PORT and K_SERVICE automatically.
 FROM python:3.12-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -13,6 +13,7 @@ WORKDIR /app
 
 RUN addgroup --system driftwatch && adduser --system --ingroup driftwatch driftwatch
 COPY wrangler.toml /app/wrangler.toml
+COPY src/cf_drift_watch_v39_worker.js /app/src/cf_drift_watch_v39_worker.js
 COPY migrations/0001_drift_watch_v39_d1.sql /app/migrations/0001_drift_watch_v39_d1.sql
 COPY server/drift_watch_edge_mirror.py /app/server/drift_watch_edge_mirror.py
 RUN chown -R driftwatch:driftwatch /app

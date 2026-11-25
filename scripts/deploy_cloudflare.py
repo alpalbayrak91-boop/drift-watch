@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 # SPDX-FileCopyrightText: 2026 AlpLab Research
 # SPDX-License-Identifier: MIT
-"""Zero-ASCII-36 Cloudflare Worker + D1 deployment orchestrator for Drift-Watch v3.9.0.
+"""Zero-ASCII-36 Cloudflare Worker + D1 deployment orchestrator for Drift-Watch v3.9.1.
 
 Verifies Wrangler authentication, resolves or provisions D1 database
-alplab-drift-watch-v39-db, patches database_id in wrangler.toml, executes
+alplab-drift-watch-v39-db, generates an ephemeral Wrangler config with the live
+database_id (never mutating tracked wrangler.toml), executes idempotent
 migrations/0001_drift_watch_v39_d1.sql remotely, and deploys the Worker
 with Dec 1 2026 Observability Free-Tier Shield (0.0000 USD out-of-pocket).
 """
@@ -16,6 +17,7 @@ import json
 import re
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 from typing import List, Optional
 
@@ -61,8 +63,10 @@ def resolve_or_create_d1() -> str:
     raise RuntimeError("Could not extract D1 database UUID from wrangler d1 create output.")
 
 
-def patch_wrangler_database_id(db_uuid: str) -> None:
-    src = WRANGLER_TOML.read_text(encoding="utf-8")
+def render_ephemeral_wrangler_toml(src_toml: Path, db_uuid: str) -> str:
+    if not UUID_RE.fullmatch(db_uuid):
+        raise ValueError(f"Invalid D1 UUID: {db_uuid}")
+    src = src_toml.read_text(encoding="utf-8")
     lines = src.splitlines()
     updated: List[str] = []
     replaced = False
@@ -74,11 +78,48 @@ def patch_wrangler_database_id(db_uuid: str) -> None:
             updated.append(line)
     if not replaced:
         raise RuntimeError("database_id field not found in wrangler.toml")
-    WRANGLER_TOML.write_text("\n".join(updated) + "\n", encoding="utf-8")
+    return "\n".join(updated) + "\n"
+
+
+def deploy_with_ephemeral_config(db_uuid: str, src_toml: Path = WRANGLER_TOML) -> subprocess.CompletedProcess[str]:
+    rendered = render_ephemeral_wrangler_toml(src_toml, db_uuid)
+    tmp_path: Optional[Path] = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=str(src_toml.parent),
+            prefix=".wrangler.deploy.",
+            suffix=".toml",
+            delete=False,
+        ) as fh:
+            fh.write(rendered)
+            tmp_path = Path(fh.name)
+
+        run_cmd(
+            [
+                "npx",
+                "--yes",
+                "wrangler",
+                "d1",
+                "execute",
+                DB_NAME,
+                "--config",
+                str(tmp_path),
+                "--remote",
+                "--file",
+                str(MIGRATION_SQL),
+            ],
+            check=True,
+        )
+        return run_cmd(["npx", "--yes", "wrangler", "deploy", "--config", str(tmp_path)], check=True)
+    finally:
+        if tmp_path is not None:
+            tmp_path.unlink(missing_ok=True)
 
 
 def main(argv: Optional[List[str]] = None) -> int:
-    ap = argparse.ArgumentParser(description="Deploy Drift-Watch v3.9.0 to Cloudflare Workers + D1 (0.0000 USD).")
+    ap = argparse.ArgumentParser(description="Deploy Drift-Watch v3.9.1 to Cloudflare Workers + D1 (0.0000 USD).")
     ap.add_argument("--dry-run", action="store_true", help="Bundle and validate Worker without remote mutation.")
     ap.add_argument("--outdir", default="/tmp/dw_v39_dist", help="Output directory for --dry-run bundle.")
     args = ap.parse_args(argv)
@@ -90,22 +131,7 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     run_cmd(["npx", "--yes", "wrangler", "whoami"], check=True)
     db_uuid = resolve_or_create_d1()
-    patch_wrangler_database_id(db_uuid)
-    run_cmd(
-        [
-            "npx",
-            "--yes",
-            "wrangler",
-            "d1",
-            "execute",
-            DB_NAME,
-            "--remote",
-            "--file",
-            str(MIGRATION_SQL),
-        ],
-        check=True,
-    )
-    dep = run_cmd(["npx", "--yes", "wrangler", "deploy"], check=True)
+    dep = deploy_with_ephemeral_config(db_uuid)
     sys.stdout.write(dep.stdout)
     return 0
 

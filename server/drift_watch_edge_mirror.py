@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
 # SPDX-FileCopyrightText: 2026 AlpLab Research
 # SPDX-License-Identifier: MIT
-"""Drift-Watch v3.9.0 Zero-Dependency Scale-to-Zero Edge Mirror WSGI Server.
+"""Drift-Watch v3.9.1 Zero-Dependency Scale-to-Zero Edge Mirror WSGI Server.
 
 Initializes an in-memory SQLite database directly from migrations/0001_drift_watch_v39_d1.sql
 (40 targets W01..W40, 34 strict MC06 core targets W01..W34, 6 Wave-14 targets W35..W40,
-and 0-SCAN covering/partial indexes) and serves /, /health, /telemetry/24h, /envelopes
+and 0-SCAN covering/partial indexes) and serves /, /health, /healthz, /telemetry/24h, /envelopes
 with Strict-CSP3 headers and 0.0000 USD out-of-pocket cost.
 
-Host default: BIND_HOST=127.0.0.1 (Dockerfile injects container bind address inside Cloud Run).
+Host default: 127.0.0.1 on bare host; K_SERVICE / BIND_HOST inside Cloud Run container.
+Fail-closed observability shield audit: missing wrangler.toml yields shield_compliant=False.
 Strict KURAL-3 hygiene: 0 chr(36) anywhere in source or rendered output; USD only.
 """
 
@@ -21,22 +22,24 @@ import hashlib
 import html
 import json
 import os
+import re
 import signal
 import sqlite3
 import threading
 import time
 from pathlib import Path
 from socketserver import ThreadingMixIn
-from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Tuple
 from urllib.parse import parse_qs
 from wsgiref.simple_server import WSGIRequestHandler, WSGIServer
 
-VERSION = "v3.9.0"
+VERSION = "v3.9.1"
 ENGINE_ID = "IS-FON-93-DRIFT-WATCH-V39-UNIFIED"
 COST_USD = "0.0000 USD"
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_SCHEMA_PATH = REPO_ROOT / "migrations" / "0001_drift_watch_v39_d1.sql"
 DEFAULT_WRANGLER_PATH = REPO_ROOT / "wrangler.toml"
+DEFAULT_WORKER_PATH = REPO_ROOT / "src" / "cf_drift_watch_v39_worker.js"
 
 _BASE_CSS = (
     "body{font-family:system-ui,-apple-system,sans-serif;margin:0;background:#090f1d;color:#e6eefc}"
@@ -58,7 +61,31 @@ META_HTML_CSP3 = (
     "script-src 'none'; img-src 'none'; connect-src 'none'; object-src 'none'; "
     "base-uri 'none'; form-action 'none'"
 )
-STRICT_JSON_CSP3 = "default-src 'none'; style-src 'none'; frame-ancestors 'none'"
+STRICT_JSON_CSP3 = "default-src 'none'; style-src 'none'; script-src 'none'; frame-ancestors 'none'"
+
+_COLD_SQL_CONST_RE = re.compile(
+    r"export\s+const\s+COLD_START_HEAL_SQL\s*=\s*([\s\S]*?);",
+    re.MULTILINE,
+)
+_QUOTED_SEG_RE = re.compile(r'"([^"]*)"')
+
+
+def resolve_bind_host(env: Optional[Mapping[str, str]] = None) -> str:
+    src = os.environ if env is None else env
+    return (src.get("BIND_HOST") or "").strip() or ("0.0.0.0" if src.get("K_SERVICE") else "127.0.0.1")
+
+
+def extract_worker_cold_start_sql(worker_path: Path = DEFAULT_WORKER_PATH) -> str:
+    if not worker_path.exists():
+        raise FileNotFoundError(f"Worker source missing for SQL parity audit: {worker_path}")
+    src = worker_path.read_text(encoding="utf-8")
+    m = _COLD_SQL_CONST_RE.search(src)
+    if not m:
+        raise ValueError("COLD_START_HEAL_SQL constant not found in cf_drift_watch_v39_worker.js")
+    parts = _QUOTED_SEG_RE.findall(m.group(1))
+    if not parts:
+        raise ValueError("COLD_START_HEAL_SQL string segments empty")
+    return "".join(parts).strip()
 
 
 def iso_week_key(now_utc: dt.datetime) -> str:
@@ -78,17 +105,8 @@ def parse_observability_shield(wrangler_path: Path = DEFAULT_WRANGLER_PATH) -> D
         "shield_compliant": False,
     }
     if not wrangler_path.exists():
-        shield.update(
-            {
-                "observability_enabled": True,
-                "head_sampling_rate": 0.10,
-                "logs_enabled": True,
-                "logs_head_sampling_rate": 0.10,
-                "invocation_logs": False,
-                "traces_enabled": False,
-                "shield_compliant": True,
-            }
-        )
+        shield["error"] = "missing_wrangler_toml"
+        shield["shield_compliant"] = False
         return shield
 
     section = ""
@@ -134,11 +152,17 @@ def parse_observability_shield(wrangler_path: Path = DEFAULT_WRANGLER_PATH) -> D
 class DriftWatchMirrorStore:
     """Thread-safe in-memory SQLite mirror initialized from D1 migration SQL."""
 
-    def __init__(self, schema_path: Path = DEFAULT_SCHEMA_PATH, wrangler_path: Path = DEFAULT_WRANGLER_PATH) -> None:
+    def __init__(
+        self,
+        schema_path: Path = DEFAULT_SCHEMA_PATH,
+        wrangler_path: Path = DEFAULT_WRANGLER_PATH,
+        worker_path: Path = DEFAULT_WORKER_PATH,
+    ) -> None:
         self._lock = threading.RLock()
         self._boot_monotonic = time.monotonic()
         self._schema_path = schema_path
         self._wrangler_path = wrangler_path
+        self._worker_path = worker_path
         self._conn = sqlite3.connect(":memory:", check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
         self._conn.execute("PRAGMA foreign_keys = ON;")
@@ -148,6 +172,7 @@ class DriftWatchMirrorStore:
         self._shield = parse_observability_shield(wrangler_path)
 
     def verify_zero_table_scans(self) -> Dict[str, Any]:
+        cold_sql = extract_worker_cold_start_sql(self._worker_path)
         queries = {
             "due_batch_lookup": (
                 "SELECT target_id, url FROM dw_targets "
@@ -155,10 +180,8 @@ class DriftWatchMirrorStore:
                 (29932000,),
             ),
             "cold_start_partial_lookup": (
-                "SELECT target_id, next_due_epoch_min FROM dw_targets "
-                "WHERE active = 1 AND last_polled_epoch_min = 0 AND next_due_epoch_min > ? "
-                "ORDER BY next_due_epoch_min ASC LIMIT 45",
-                (29932500,),
+                cold_sql,
+                (29931800, 29932100),
             ),
             "hourly_rollup_24h_range": (
                 "SELECT hour_bucket_utc, polls_total FROM dw_poll_hourly_rollup "
@@ -186,9 +209,12 @@ class DriftWatchMirrorStore:
                     upper = d.upper()
                     if "SCAN " in upper and "USING INDEX" not in upper and "USING COVERING INDEX" not in upper:
                         full_scans += 1
+        cold_details = " | ".join(plans["cold_start_partial_lookup"])
+        cold_uses_partial_idx = "idx_dw_targets_cold_start" in cold_details
         return {
-            "zero_full_table_scans": full_scans == 0,
+            "zero_full_table_scans": full_scans == 0 and cold_uses_partial_idx,
             "full_table_scan_count": full_scans,
+            "cold_start_uses_partial_index": cold_uses_partial_idx,
             "covering_and_partial_indexes": index_names,
             "index_count": len(index_names),
             "query_plans": plans,
@@ -280,6 +306,7 @@ class DriftWatchMirrorStore:
             "index_zero_scan_audit": {
                 "zero_full_table_scans": index_audit["zero_full_table_scans"],
                 "full_table_scan_count": index_audit["full_table_scan_count"],
+                "cold_start_uses_partial_index": index_audit["cold_start_uses_partial_index"],
                 "index_count": index_audit["index_count"],
                 "indexes": index_audit["covering_and_partial_indexes"],
             },
@@ -362,9 +389,9 @@ def render_root_html(health: Dict[str, Any]) -> str:
         "<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\" />\n"
         "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\" />\n"
         f"<meta http-equiv=\"Content-Security-Policy\" content=\"{META_HTML_CSP3}\" />\n"
-        "<title>Drift-Watch v3.9.0 Scale-to-Zero Edge Poller &amp; D1 Shield</title>\n"
+        f"<title>Drift-Watch {VERSION} Scale-to-Zero Edge Poller &amp; D1 Shield</title>\n"
         f"<style>{_BASE_CSS}</style>\n</head>\n<body>\n<header>\n"
-        "<h1>Drift-Watch v3.9.0 Unified Schema-Parity Edge Poller (Dec 1 Observability Shield)</h1>\n"
+        f"<h1>Drift-Watch {VERSION} Unified Schema-Parity Edge Poller (Dec 1 Observability Shield)</h1>\n"
         "<div class=\"sub\">40 Active Targets (W01..W40) | 34 Strict MC06 Core | 0-SCAN D1 Covering Indexes | Strict-CSP3 | 0.0000 USD</div>\n"
         "</header>\n<section class=\"grid\">\n"
         f"<div class=\"card\"><div class=\"muted\">Target Fleet &amp; Weyl Dispersion</div>"
@@ -372,7 +399,7 @@ def render_root_html(health: Dict[str, Any]) -> str:
         f"<div class=\"muted\">Unique Weyl Offsets: {health['unique_weyl_offsets_count']} | VaR: {health['monitored_value_at_risk_usd']}</div></div>\n"
         f"<div class=\"card\"><div class=\"muted\">SQLite / D1 0-SCAN Index Guard</div>"
         f"<div class=\"kpi\">{idx['index_count']} Indexes | {idx['full_table_scan_count']} Scans</div>"
-        f"<div class=\"muted\">Zero Full-Table Scans: {idx['zero_full_table_scans']} (5M row/day Free Cap Safe)</div></div>\n"
+        f"<div class=\"muted\">Cold-Start Partial Idx: {idx['cold_start_uses_partial_index']} | 0-SCAN: {idx['zero_full_table_scans']}</div></div>\n"
         f"<div class=\"card\"><div class=\"muted\">Dec 1 2026 Observability Shield</div>"
         f"<div class=\"kpi\">Sample {sh['head_sampling_rate']} | Traces Off</div>"
         f"<div class=\"muted\">invocation_logs={sh['invocation_logs']} | Compliant: {sh['shield_compliant']}</div></div>\n"
@@ -450,7 +477,7 @@ class QuietWSGIHandler(WSGIRequestHandler):
 
 
 def serve_forever() -> None:
-    host = os.environ.get("BIND_HOST", "127.0.0.1")
+    host = (os.environ.get("BIND_HOST") or "").strip() or ("0.0.0.0" if os.environ.get("K_SERVICE") else "127.0.0.1")
     port = int(os.environ.get("PORT", "8080"))
     srv = ThreadingWSGIServer((host, port), QuietWSGIHandler)
     srv.set_app(wsgi_app)
@@ -465,7 +492,7 @@ def serve_forever() -> None:
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description="Drift-Watch v3.9.0 Scale-to-Zero Edge Mirror")
+    ap = argparse.ArgumentParser(description="Drift-Watch v3.9.1 Scale-to-Zero Edge Mirror")
     ap.add_argument("--serve", action="store_true", help="Start HTTP WSGI server")
     args = ap.parse_args()
     if args.serve:
