@@ -1,19 +1,22 @@
 cff-version: 1.2.0
-title: "Drift-Watch v3.9.1: Zero-Cash Policy, Grant, and Free-Tier Quota Drift Radar"
+title: "Drift-Watch v4.0.0: Sequential API, Policy, and Cloud Quota Drift Radar with Ville E-Processes and RFC 6962 Merkle Transparency"
 message: "If you use this software in research or engineering systems, please cite it using the metadata below."
 type: software
 authors:
   - family-names: Albayrak
     given-names: Alp
-    affiliation: AlpLab Research
-version: 3.9.1
-date-released: "2026-11-25"
+    orcid: "https://orcid.org/0009-0008-9737-4477"
+version: "4.0.0"
+date-released: "2026-11-27"
 license: MIT
 repository-code: "https://github.com/alpalbayrak91-boop/drift-watch"
 keywords:
+  - sequential-change-point-detection
+  - cusum
+  - page-hinkley
+  - ville-supermartingale
+  - weyl-equidistribution
+  - rfc6962-merkle-tree
+  - rfc8785-jcs
   - cloudflare-workers
-  - d1-sqlite
-  - rate-limit-headers
-  - quota-drift-detection
-  - weyl-dispersion
-  - scale-to-zero
+  - lean4

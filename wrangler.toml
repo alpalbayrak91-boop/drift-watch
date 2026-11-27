@@ -1,10 +1,10 @@
-# SPDX-FileCopyrightText: 2026 AlpLab Research
+# SPDX-FileCopyrightText: 2026 Alp Albayrak
 # SPDX-License-Identifier: MIT
-# Drift-Watch v3.9.1 Wrangler Configuration (Dec 1 2026 Split Observability Free Tier Shield)
-# Strict KURAL-3 hygiene: 0 chr(36); USD only.
+# Drift-Watch v4.0.0 Cloudflare Workers Configuration
+# Zero secrets tracked; Dec 1 Observability Split-Billing Shield & Zero-Neuron AI Cliff Guard enabled.
 
-name = "alplab-drift-watch-v39"
-main = "src/cf_drift_watch_v39_worker.js"
+name = "drift-watch-v4"
+main = "worker/cf_drift_watch_v4.ts"
 compatibility_date = "2026-11-24"
 
 [triggers]
@@ -12,7 +12,7 @@ crons = ["*/5 * * * *"]
 
 [[d1_databases]]
 binding = "DRIFT_DB"
-database_name = "alplab-drift-watch-v39-db"
+database_name = "drift-watch-v4-db"
 database_id = "00000000-0000-0000-0000-000000000000"
 
 [observability]
@@ -29,14 +29,11 @@ enabled = false
 
 [vars]
 MAX_TARGETS_PER_TICK = "4"
-ZCL_WEEKLY_PC_BUDGET_MIN = "60"
-ZCL_CLIFF_RESERVE_MIN = "20"
-SHADOW_GAMMA = "0.85"
-EWMA_GAMMA_DECAY = "0.92"
-LAGRANGE_NU_REF = "16.2744"
-T24H_CLIFF_MAX_PERIOD_MIN = "240"
-GUARD_BAND_EPS = "0.08"
+CUSUM_K_SLACK_BPS = "1200"
+CUSUM_H_THRESH_BPS = "4800"
+PH_DELTA_BPS = "350"
+PH_LAMBDA_THRESH_BPS = "5200"
+CORROBORATION_WINDOW = "4"
 FETCH_TIMEOUT_MS = "8000"
 TELEMETRY_RETENTION_HOURS = "168"
 WORKERS_AI_MODE = "DETERMINISTIC_REGEX_ONLY"
-WORKERS_AI_ESCALATION_MODEL = "@cf/openai/gpt-oss-20b"

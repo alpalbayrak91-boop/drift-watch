@@ -1,25 +1,25 @@
 {
-  "title": "Drift-Watch v3.9.1: Zero-Cash Policy, Grant, and Free-Tier Quota Drift Radar with Weyl Dispersion and 0-SCAN SQLite/D1 Covering Indexes",
-  "version": "3.9.1",
+  "title": "Drift-Watch v4.0.0: Sequential API, Policy, and Cloud Quota Drift Radar with Coprime Weyl Scheduling, Ville E-Processes, and RFC 6962 Transparency Receipts",
+  "version": "4.0.0",
   "upload_type": "software",
-  "publication_date": "2026-11-25",
+  "publication_date": "2026-11-27",
   "license": "MIT",
   "access_right": "open",
   "creators": [
     {
       "name": "Albayrak, Alp",
-      "affiliation": "AlpLab Research"
+      "orcid": "0009-0008-9737-4477"
     }
   ],
-  "description": "Zero-dependency Cloudflare Worker + D1 SQLite edge poller and Python 3.12 WSGI scale-to-zero mirror monitoring 40 grant, API, and cloud free-tier endpoints (34 MC06 core + 6 Wave-14 targets) with Weyl phase dispersion, Gamma-Poisson EWMA scheduling, IETF RateLimit header envelope parsing, Dec 1 2026 Cloudflare Observability split-billing shield, idempotent INSERT OR IGNORE migrations, and disjoint UNION ALL 0-SCAN SQLite partial/covering indexes at 0.0000 USD out-of-pocket cost.",
+  "description": "Zero-dependency Python 3.10+ and Cloudflare Workers TypeScript sequential drift detection and cryptographic audit engine combining Lorden/Moustakides two-sided CUSUM, Page-Hinkley cumulative deviation, Ville non-negative supermartingale e-processes, coprime Weyl phase dispersion with RFC 9110 HTTP 304 conditional polling, V8-exact RFC 8785 JCS serialization, O(log N) RFC 6962 Merkle transparency receipts, and 33 machine-checked Lean 4 theorems.",
   "keywords": [
-    "cloudflare-workers",
-    "d1-sqlite",
-    "quota-monitoring",
-    "rate-limiting",
-    "grant-radar",
+    "sequential-analysis",
+    "cusum",
+    "ville-supermartingale",
     "weyl-equidistribution",
-    "scale-to-zero",
-    "strict-csp3"
+    "rfc6962",
+    "rfc8785",
+    "cloudflare-workers",
+    "lean4"
   ]
 }

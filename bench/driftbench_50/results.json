@@ -1,0 +1,158 @@
+{
+  "schema": "driftbench-50-v4",
+  "version": "4.0.0",
+  "seed": 20261127,
+  "total_traces": 50,
+  "persistent_drift_traces": 25,
+  "benign_null_traces": 25,
+  "ticks_per_trace": 360,
+  "total_ticks_evaluated": 18000,
+  "change_onset_tick": 120,
+  "http_304_hits": 14696,
+  "actual_wire_bytes": 16522080,
+  "unconditional_baseline_bytes": 75600000,
+  "http_304_egress_reduction_pct": 78.1454,
+  "weyl_dispersion_audit": {
+    "modulus": 288,
+    "step": 167,
+    "step_inverse": 119,
+    "endpoint_count": 50,
+    "unique_slots": 50,
+    "collision_count": 0,
+    "hourly_min_endpoints": 2,
+    "hourly_max_endpoints": 3,
+    "circular_min_gap_min": 25,
+    "circular_max_gap_min": 35
+  },
+  "merkle_tree_size": 847,
+  "verified_merkle_receipts": 847,
+  "merkle_root_sha256": "64523fb5a8f64d47aff0fe9994f387766d75cc608b0777c535b6634caae46118",
+  "out_of_pocket_cost_usd": "0.0000 USD",
+  "detectors": {
+    "static_single_tick": {
+      "TP": 25,
+      "FP": 10,
+      "TN": 15,
+      "FN": 0,
+      "pre_onset_false_alarms": 0,
+      "tpr": 1.0,
+      "tpr_wilson_95_ci": [
+        0.866808,
+        1.0
+      ],
+      "fpr": 0.4,
+      "fpr_wilson_95_ci": [
+        0.234033,
+        0.592605
+      ],
+      "precision": 0.714286,
+      "f1": 0.833333,
+      "arl1_mean_delay_ticks": 1.44,
+      "arl1_median_delay_ticks": 1.0,
+      "arl1_max_delay_ticks": 6,
+      "tick_latency_mean_us": 0.951,
+      "tick_latency_p50_us": 0.87,
+      "tick_latency_p95_us": 1.6
+    },
+    "rolling_zscore": {
+      "TP": 25,
+      "FP": 24,
+      "TN": 1,
+      "FN": 0,
+      "pre_onset_false_alarms": 14,
+      "tpr": 1.0,
+      "tpr_wilson_95_ci": [
+        0.866808,
+        1.0
+      ],
+      "fpr": 0.96,
+      "fpr_wilson_95_ci": [
+        0.804559,
+        0.992904
+      ],
+      "precision": 0.510204,
+      "f1": 0.675676,
+      "arl1_mean_delay_ticks": 1,
+      "arl1_median_delay_ticks": 1.0,
+      "arl1_max_delay_ticks": 1,
+      "tick_latency_mean_us": 6.958,
+      "tick_latency_p50_us": 6.74,
+      "tick_latency_p95_us": 10.19
+    },
+    "drift_watch_v4": {
+      "TP": 25,
+      "FP": 0,
+      "TN": 25,
+      "FN": 0,
+      "pre_onset_false_alarms": 0,
+      "tpr": 1.0,
+      "tpr_wilson_95_ci": [
+        0.866808,
+        1.0
+      ],
+      "fpr": 0.0,
+      "fpr_wilson_95_ci": [
+        0.0,
+        0.133192
+      ],
+      "precision": 1.0,
+      "f1": 1.0,
+      "arl1_mean_delay_ticks": 3.04,
+      "arl1_median_delay_ticks": 2.0,
+      "arl1_max_delay_ticks": 8,
+      "tick_latency_mean_us": 29.257,
+      "tick_latency_p50_us": 17.94,
+      "tick_latency_p95_us": 89.67
+    }
+  },
+  "by_scenario_class": {
+    "API_MCP_SCHEMA_BREAK": {
+      "traces": 5,
+      "static_alarms": 5,
+      "zscore_alarms": 5,
+      "dw4_alarms": 5
+    },
+    "RATELIMIT_HEADER_CUT": {
+      "traces": 5,
+      "static_alarms": 5,
+      "zscore_alarms": 5,
+      "dw4_alarms": 5
+    },
+    "PERSISTENT_STATUS_CLIFF": {
+      "traces": 5,
+      "static_alarms": 5,
+      "zscore_alarms": 5,
+      "dw4_alarms": 5
+    },
+    "LATENCY_TAIL_SHIFT": {
+      "traces": 5,
+      "static_alarms": 5,
+      "zscore_alarms": 5,
+      "dw4_alarms": 5
+    },
+    "SILENT_POLICY_CONTRACT_DRIFT": {
+      "traces": 5,
+      "static_alarms": 5,
+      "zscore_alarms": 5,
+      "dw4_alarms": 5
+    },
+    "BENIGN_STATIONARY_304": {
+      "traces": 8,
+      "static_alarms": 0,
+      "zscore_alarms": 7,
+      "dw4_alarms": 0
+    },
+    "BENIGN_DIURNAL_AND_EXPANSION": {
+      "traces": 7,
+      "static_alarms": 0,
+      "zscore_alarms": 7,
+      "dw4_alarms": 0
+    },
+    "BENIGN_TRANSIENT_3TICK_429_BURST": {
+      "traces": 10,
+      "static_alarms": 10,
+      "zscore_alarms": 10,
+      "dw4_alarms": 0
+    }
+  }
+}

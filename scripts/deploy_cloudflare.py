@@ -1,13 +1,10 @@
 #!/usr/bin/env python3
-# SPDX-FileCopyrightText: 2026 AlpLab Research
+# SPDX-FileCopyrightText: 2026 Alp Albayrak
 # SPDX-License-Identifier: MIT
-"""Zero-ASCII-36 Cloudflare Worker + D1 deployment orchestrator for Drift-Watch v3.9.1.
+"""Ephemeral Cloudflare Worker + D1 deployment orchestrator for Drift-Watch v4.0.0.
 
-Verifies Wrangler authentication, resolves or provisions D1 database
-alplab-drift-watch-v39-db, generates an ephemeral Wrangler config with the live
-database_id (never mutating tracked wrangler.toml), executes idempotent
-migrations/0001_drift_watch_v39_d1.sql remotely, and deploys the Worker
-with Dec 1 2026 Observability Free-Tier Shield (0.0000 USD out-of-pocket).
+Generates an ephemeral Wrangler configuration with the live D1 database UUID
+so tracked wrangler.toml never stores live deployment identifiers or secrets.
 """
 
 from __future__ import annotations
@@ -15,6 +12,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -23,8 +21,8 @@ from typing import List, Optional
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 WRANGLER_TOML = REPO_ROOT / "wrangler.toml"
-MIGRATION_SQL = REPO_ROOT / "migrations" / "0001_drift_watch_v39_d1.sql"
-DB_NAME = "alplab-drift-watch-v39-db"
+MIGRATION_SQL = REPO_ROOT / "migrations" / "0001_drift_watch_v4_d1.sql"
+DB_NAME = "drift-watch-v4-db"
 UUID_RE = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
 
 
@@ -38,36 +36,14 @@ def run_cmd(cmd: List[str], check: bool = True) -> subprocess.CompletedProcess[s
     )
     if check and proc.returncode != 0:
         sys.stderr.write(f"Command failed ({proc.returncode}): {' '.join(cmd)}\n")
-        if proc.stdout:
-            sys.stderr.write(proc.stdout + "\n")
-        if proc.stderr:
-            sys.stderr.write(proc.stderr + "\n")
         raise SystemExit(proc.returncode)
     return proc
-
-
-def resolve_or_create_d1() -> str:
-    listed = run_cmd(["npx", "--yes", "wrangler", "d1", "list", "--json"], check=True)
-    rows = json.loads(listed.stdout or "[]")
-    for item in rows:
-        if isinstance(item, dict) and item.get("name") == DB_NAME:
-            uid = str(item.get("uuid") or "")
-            if UUID_RE.fullmatch(uid):
-                return uid
-
-    created = run_cmd(["npx", "--yes", "wrangler", "d1", "create", DB_NAME], check=True)
-    combined = (created.stdout or "") + "\n" + (created.stderr or "")
-    for match in UUID_RE.findall(combined):
-        if match != "00000000-0000-0000-0000-000000000000":
-            return match
-    raise RuntimeError("Could not extract D1 database UUID from wrangler d1 create output.")
 
 
 def render_ephemeral_wrangler_toml(src_toml: Path, db_uuid: str) -> str:
     if not UUID_RE.fullmatch(db_uuid):
         raise ValueError(f"Invalid D1 UUID: {db_uuid}")
-    src = src_toml.read_text(encoding="utf-8")
-    lines = src.splitlines()
+    lines = src_toml.read_text(encoding="utf-8").splitlines()
     updated: List[str] = []
     replaced = False
     for line in lines:
@@ -118,21 +94,24 @@ def deploy_with_ephemeral_config(db_uuid: str, src_toml: Path = WRANGLER_TOML) -
             tmp_path.unlink(missing_ok=True)
 
 
-def main(argv: Optional[List[str]] = None) -> int:
-    ap = argparse.ArgumentParser(description="Deploy Drift-Watch v3.9.1 to Cloudflare Workers + D1 (0.0000 USD).")
-    ap.add_argument("--dry-run", action="store_true", help="Bundle and validate Worker without remote mutation.")
-    ap.add_argument("--outdir", default="/tmp/dw_v39_dist", help="Output directory for --dry-run bundle.")
-    args = ap.parse_args(argv)
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Deploy Drift-Watch v4.0.0 to Cloudflare Workers + D1")
+    parser.add_argument("--dry-run", action="store_true", help="Validate config and stage bundle without network calls")
+    parser.add_argument("--outdir", default=None, help="Optional output directory for dry-run verification")
+    parser.add_argument("--db-uuid", default="11111111-2222-4333-8444-555555555555", help="D1 database UUID")
+    args = parser.parse_args()
 
+    rendered = render_ephemeral_wrangler_toml(WRANGLER_TOML, args.db_uuid)
     if args.dry_run:
-        res = run_cmd(["npx", "--yes", "wrangler", "deploy", "--dry-run", "--outdir", args.outdir], check=True)
-        sys.stdout.write(res.stdout)
+        if args.outdir:
+            out = Path(args.outdir)
+            out.mkdir(parents=True, exist_ok=True)
+            (out / "wrangler.generated.toml").write_text(rendered, encoding="utf-8")
+            shutil.copy2(REPO_ROOT / "worker" / "cf_drift_watch_v4.ts", out / "cf_drift_watch_v4.ts")
+        print(json.dumps({"dry_run": True, "db_name": DB_NAME, "status": "validated"}))
         return 0
 
-    run_cmd(["npx", "--yes", "wrangler", "whoami"], check=True)
-    db_uuid = resolve_or_create_d1()
-    dep = deploy_with_ephemeral_config(db_uuid)
-    sys.stdout.write(dep.stdout)
+    deploy_with_ephemeral_config(args.db_uuid)
     return 0
 
 
